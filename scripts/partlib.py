@@ -1,30 +1,20 @@
 """partlib: reusable Blender helpers for building small printable parts.
 
-Import from a project's build script (runs inside Blender, live or headless):
+A project's build script imports it (kit.py tells Blender where it is):
 
-    import sys, os
-    sys.path.insert(0, "<skill>/scripts")
     import partlib as pl
+    pl.setup_mm_scene()                       # 1 Blender unit = 1 mm
+    body = pl.box("body", -10, 10, -4, 4, 0, 4, coll)
+    pl.boolean(body, pl.hole("h1", (6, 0, 4), (0, 0, -1), 2.2, 4, coll), 'DIFFERENCE', "hole 1")
+    pl.boolean(body, pl.place_text("label", "BR2", coll, "+Z", (0, 0, 4), 1.5, 0.3, "cut"), 'DIFFERENCE', "label")
 
-Every helper here was proven on the 2026-11 brake caliper build (Blender 5.2.1).
-Units: call setup_mm_scene() first so 1 Blender unit = 1 mm.
-
-Rules baked in (each one cost time to learn):
-  * Booleans: MANIFOLD solver first, EXACT fallback, and every result is checked
-    (0 non-manifold edges, 0 loose geometry, volume changed and positive).
-  * Union every detail into ONE body. A plain join leaves overlapping shells that
-    pass a naive watertight check and print badly.
-  * Bevel clean primitives BEFORE they meet a boolean. A whole-mesh bevel after
-    the booleans collapsed to ~0 (clamped) or self-intersected (unclamped).
-  * Text: Blender's built-in font gives strokes too thin for resin at ~1.3 mm
-    letter height. Load a rounded bold font. Text `offset` thickens strokes but
-    makes glyph outlines self-overlap, so prefer a heavier font.
-  * GLB ignores the scene unit scale: export a 0.001-scaled copy or the file
-    comes out 1000x too large. STL: global_scale 1, use_scene_unit False.
+Every helper was proven on a real build; the rules behind them (boolean order,
+bevel order, fonts, GLB scale) are in references/blender-gotchas.md.
 """
 
 import math
 import os
+import sys
 
 import bmesh
 import bpy
@@ -49,10 +39,7 @@ def setup_mm_scene(delete_startup_cube=False):
     if delete_startup_cube:
         cube = bpy.data.objects.get("Cube")
         if cube is not None:
-            me = cube.data
-            bpy.data.objects.remove(cube, do_unlink=True)
-            if me is not None and me.users == 0:
-                bpy.data.meshes.remove(me)
+            remove_obj(cube)
             log("deleted startup Cube")
     return sc
 
@@ -80,8 +67,10 @@ def remove_obj(ob):
 
 
 def select_only(ob):
+    bpy.context.view_layer.update()            # removed objects can leave None entries until an update
     for o in bpy.context.view_layer.objects:
-        o.select_set(False)
+        if o is not None:
+            o.select_set(False)
     ob.select_set(True)
     bpy.context.view_layer.objects.active = ob
 
@@ -133,15 +122,51 @@ def rounded_rect(cx, cy, sx, sy, r, segs=8):
     return pts
 
 
-def cylinder(name, axis, center, r, length, coll, segs=48):
-    """Closed cylinder along 'X' | 'Y' | 'Z', centred at center."""
-    circle = [(r * math.cos(2 * math.pi * i / segs), r * math.sin(2 * math.pi * i / segs)) for i in range(segs)]
-    ob = prism(name, circle, -length / 2, length / 2, coll)
-    rot = {'Z': Matrix.Identity(4),
-           'X': Matrix.Rotation(math.radians(90), 4, 'Y'),
-           'Y': Matrix.Rotation(math.radians(-90), 4, 'X')}[axis]
+def _axis_vector(axis):
+    if isinstance(axis, str):
+        return Vector({'X': (1, 0, 0), 'Y': (0, 1, 0), 'Z': (0, 0, 1)}[axis.upper()])
+    v = Vector(axis)
+    if v.length < 1e-9:
+        raise ValueError("axis must be 'X', 'Y', 'Z' or a non-zero vector")
+    return v.normalized()
+
+
+def cylinder(name, axis, center, r, length, coll, segs=48, r_top=None):
+    """Closed cylinder (or cone, with r_top) along axis 'X' | 'Y' | 'Z' or any
+    direction vector, centred at center."""
+    r_top = r if r_top is None else r_top
+    ring = [(math.cos(2 * math.pi * i / segs), math.sin(2 * math.pi * i / segs)) for i in range(segs)]
+    verts = [(r * c, r * s, -length / 2) for c, s in ring] + [(r_top * c, r_top * s, length / 2) for c, s in ring]
+    faces = [list(range(segs)), list(range(2 * segs - 1, segs - 1, -1))]
+    faces += [[i, (i + 1) % segs, segs + (i + 1) % segs, segs + i] for i in range(segs)]
+    ob = obj_from_pydata(name, verts, faces, coll)
+    rot = Vector((0, 0, 1)).rotation_difference(_axis_vector(axis)).to_matrix().to_4x4()
     ob.data.transform(Matrix.Translation(Vector(center)) @ rot)
     return ob
+
+
+def hole(name, surface_point, direction, d, depth, coll, segs=48, counterbore=None, countersink=None):
+    """A hole cutter: starts 0.5 mm outside surface_point and runs `depth` mm along
+    `direction` (into the part). Use a depth past the far side for a through hole.
+    counterbore=(diameter, depth), or countersink=(mouth diameter, included angle
+    in degrees, e.g. 90), shapes the mouth. Returns the cutter: DIFFERENCE it from
+    the body with boolean()."""
+    v = _axis_vector(direction)
+    p = Vector(surface_point)
+    total = depth + 0.5
+    cut = cylinder(name, v, p + v * (total / 2 - 0.5), d / 2, total, coll, segs)
+    if counterbore:
+        cd, cdep = counterbore
+        cb = cylinder(name + "_cb", v, p + v * ((cdep + 0.5) / 2 - 0.5), cd / 2, cdep + 0.5, coll, segs)
+        boolean(cut, cb, 'UNION', name + " counterbore")
+    if countersink:
+        dm, angle = countersink
+        h = (dm - d) / 2 / math.tan(math.radians(angle / 2))
+        cone = cylinder(name + "_cs", v, p + v * (h / 2), dm / 2, h, coll, segs, r_top=d / 2)
+        lip = cylinder(name + "_lip", v, p - v * 0.25, dm / 2, 0.5, coll, segs)
+        boolean(cone, lip, 'UNION', name + " countersink lip")
+        boolean(cut, cone, 'UNION', name + " countersink")
+    return cut
 
 
 def dome(name, center_surface, outward, base_d, height, coll):
@@ -184,6 +209,37 @@ def offset_convex(poly, d):
     return out
 
 
+def copy_obj(ob, name, coll=None):
+    new = ob.copy()
+    new.data = ob.data.copy()
+    new.name = name
+    (coll or ob.users_collection[0]).objects.link(new)
+    return new
+
+
+def mirror_copy(ob, axis, name=None, about=0.0):
+    """A mirrored copy across the plane axis = about (axis 'X' | 'Y' | 'Z'). Normals are fixed."""
+    k = "XYZ".index(axis.upper())
+    s = [1.0, 1.0, 1.0]
+    s[k] = -1.0
+    t = [0.0, 0.0, 0.0]
+    t[k] = 2 * about
+    new = copy_obj(ob, name or ob.name + "_mirror")
+    new.data.transform(Matrix.Translation(Vector(t)) @ Matrix.Diagonal((*s, 1.0)))
+    new.data.flip_normals()
+    return new
+
+
+def array_copies(ob, count, offset, name=None):
+    """count copies of ob (including the original) spaced by offset [x, y, z]."""
+    out = [ob]
+    for i in range(1, count):
+        c = copy_obj(ob, f"{name or ob.name}_{i}")
+        c.data.transform(Matrix.Translation(Vector(offset) * i))
+        out.append(c)
+    return out
+
+
 # --------------------------------------------------- checks + booleans ----
 
 def bm_stats(ob):
@@ -210,7 +266,8 @@ def apply_modifiers(ob):
 
 
 def bevel_obj(ob, width, label, segs=2, angle_deg=40.0):
-    """Cast softness on a clean primitive, before any boolean touches it."""
+    """Cast softness on a clean primitive, before any boolean touches it.
+    On FDM, a bevel on bottom edges creates overhangs; bevel top edges only there."""
     vol0 = bm_stats(ob)["volume"]
     mod = ob.modifiers.new("bevel", 'BEVEL')
     mod.width = width
@@ -226,13 +283,19 @@ def bevel_obj(ob, width, label, segs=2, angle_deg=40.0):
     return ob
 
 
+def _solvers():
+    """Boolean solvers this Blender has, best first (MANIFOLD needs Blender 4.5+)."""
+    have = set(bpy.types.BooleanModifier.bl_rna.properties["solver"].enum_items.keys())
+    return [s for s in ('MANIFOLD', 'EXACT') if s in have] or ['EXACT']
+
+
 def boolean(target, tool, op, label):
-    """Apply one boolean ('UNION' | 'DIFFERENCE' | 'INTERSECT'), MANIFOLD then
-    EXACT; validate the result; delete the tool. Raises if both solvers fail."""
+    """Apply one boolean ('UNION' | 'DIFFERENCE' | 'INTERSECT'), best solver first;
+    validate the result; delete the tool. Raises if every solver fails."""
     before = bm_stats(target)
     backup = target.data.copy()
     st = None
-    for solver in ('MANIFOLD', 'EXACT'):
+    for solver in _solvers():
         mod = target.modifiers.new("bool", 'BOOLEAN')
         mod.operation = op
         mod.solver = solver
@@ -251,15 +314,37 @@ def boolean(target, tool, op, label):
         if old.users == 0:
             bpy.data.meshes.remove(old)
     else:
-        raise RuntimeError(f"boolean failed for {label}: {st}")
+        raise RuntimeError(f"boolean failed for {label}: {st} (does the tool actually touch the body?)")
     bpy.data.meshes.remove(backup)
     remove_obj(tool)
     return st
 
 
-def text_mesh(name, text, coll, font_path=None, spacing=1.0, resolution=6, extrude=0.5):
+# ------------------------------------------------------------------ text ----
+
+FONT_CANDIDATES = [
+    "/System/Library/Fonts/Supplemental/Arial Rounded Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "C:/Windows/Fonts/ARLRDBD.TTF", "C:/Windows/Fonts/arialbd.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+]
+
+
+def find_font():
+    """A bold font that exists on this machine (rounded where available), or None."""
+    return next((p for p in FONT_CANDIDATES if os.path.exists(p)), None)
+
+
+def text_mesh(name, text, coll, font_path=None, spacing=1.0, resolution=6, extrude=0.5, allow_builtin_font=False):
     """Text as a closed mesh in local XY (glyphs), Z = -extrude..+extrude.
-    Caller scales and places it (see place_on_face). Returns the object."""
+    Uses font_path, else the first bold font find_font() locates. Raises rather
+    than silently using Blender's built-in font, whose strokes are too thin to
+    print at small sizes, unless allow_builtin_font=True."""
+    font_path = font_path or find_font()
+    if font_path is None and not allow_builtin_font:
+        raise RuntimeError("no bold font found: pass font_path=<a .ttf/.otf on this machine> "
+                           "(or allow_builtin_font=True for large lettering)")
     cu = bpy.data.curves.new(name + "_curve", 'FONT')
     cu.body = text
     cu.size = 1.0
@@ -270,9 +355,11 @@ def text_mesh(name, text, coll, font_path=None, spacing=1.0, resolution=6, extru
     if font_path:
         try:
             font = bpy.data.fonts.load(font_path, check_existing=True)
-            cu.font = font
         except Exception as ex:                       # noqa: BLE001
-            log(f"font load failed ({ex}); built-in font used: CHECK STROKE WIDTH")
+            bpy.data.curves.remove(cu)
+            raise RuntimeError(f"font {font_path!r} would not load ({ex})") from ex
+        cu.font = font
+        log(f"font for {name}: {os.path.basename(font_path)}")
     try:
         cu.fill_mode = 'BOTH'
     except Exception:                                  # noqa: BLE001
@@ -292,6 +379,42 @@ def text_mesh(name, text, coll, font_path=None, spacing=1.0, resolution=6, extru
     return obj_from_bm(name, bm, coll)
 
 
+def place_text(name, text, coll, face, center, height, depth, mode, font_path=None, up=None, spacing=1.0,
+               allow_builtin_font=False):
+    """Lettering on a face, ready to boolean into the body.
+
+    face:   '+X' '-X' '+Y' '-Y' '+Z' '-Z', the outward side the text is read from
+    center: a point on that face where the text is centred
+    height: letter height in mm (scaled uniformly, so glyph proportions are kept)
+    depth:  how far it is cut in (mode 'cut') or stands up (mode 'raised'), mm
+    up:     reading-up direction on the face (default: +Z on side faces, +Y on top/bottom)
+    Returns the cutter/adder: DIFFERENCE it for 'cut', UNION it for 'raised'.
+    """
+    normals = {'+X': (1, 0, 0), '-X': (-1, 0, 0), '+Y': (0, 1, 0), '-Y': (0, -1, 0), '+Z': (0, 0, 1),
+               '-Z': (0, 0, -1)}
+    if face not in normals or mode not in ('cut', 'raised'):
+        raise ValueError("face must be one of +X -X +Y -Y +Z -Z, and mode 'cut' or 'raised'")
+    n = Vector(normals[face])
+    u = Vector(up) if up else (Vector((0, 1, 0)) if abs(n.z) > 0.5 else Vector((0, 0, 1)))
+    right = u.cross(n).normalized()
+    u = n.cross(right).normalized()
+    ob = text_mesh(name, text, coll, font_path=font_path, spacing=spacing, extrude=0.5,
+                   allow_builtin_font=allow_builtin_font)
+    me = ob.data
+    xs = [v.co.x for v in me.vertices]
+    ys = [v.co.y for v in me.vertices]
+    s = height / (max(ys) - min(ys))
+    cx, cy = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+    inside, outside = (depth, 0.3) if mode == 'cut' else (0.1, depth)   # mm into / out of the face
+    thickness = inside + outside
+    basis = Matrix(((right.x, u.x, n.x, 0), (right.y, u.y, n.y, 0), (right.z, u.z, n.z, 0), (0, 0, 0, 1)))
+    mid = Vector(center) + n * ((outside - inside) / 2)
+    me.transform(Matrix.Translation(mid) @ basis @ Matrix.Diagonal((s, s, thickness, 1.0))
+                 @ Matrix.Translation((-cx, -cy, 0.0)))
+    log(f"{name}: '{text}' {height} mm high, {mode} {depth} mm on {face}, {(max(xs) - min(xs)) * s:.2f} mm long")
+    return ob
+
+
 # -------------------------------------------------------------- export ----
 
 def export_stl(ob, path):
@@ -307,11 +430,7 @@ def export_stl(ob, path):
 def export_glb(ob, path):
     """GLB in metres (glTF ignores the scene unit scale, so scale a copy by 0.001)."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    coll = ob.users_collection[0]
-    tmp = ob.copy()
-    tmp.data = ob.data.copy()
-    tmp.name = "TMP_glb_export"
-    coll.objects.link(tmp)
+    tmp = copy_obj(ob, "TMP_glb_export")
     tmp.data.transform(ob.matrix_world)
     tmp.data.transform(Matrix.Scale(0.001, 4))
     tmp.matrix_world = Matrix.Identity(4)
@@ -323,3 +442,10 @@ def export_glb(ob, path):
         remove_obj(tmp)
     select_only(ob)
     return os.path.getsize(path)
+
+
+def print_log():
+    """The build log as readable lines (call at the end of a build script)."""
+    for line in LOG:
+        print("  " + line)
+    sys.stdout.flush()

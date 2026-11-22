@@ -1,10 +1,106 @@
-{"_note": "The verification the v1 build session actually ran (BUILD-PROMPT checks 1-3), re-expressed for print_check.",
+{
+ "_note": "The verification the v1 build session actually ran (its build prompt's checks 1-3), re-expressed for print_check. v1 reported narrow letter features without gating them, so the letter region is accepted here for both thin and gap checks; what remains is v1's own coverage.",
  "process": "resin",
- "envelope": {"dims_mm": [20.5, 12.8, 6.1], "tol_mm": 0.3},
+ "envelope": {
+  "dims_mm": [
+   20.5,
+   12.8,
+   6.1
+  ],
+  "tol_mm": 0.3
+ },
  "rays": [
-  {"name": "slot +X (none)", "origin": [3.1, 0, 26.1], "dir": [0, 0, -1], "expect": "clear"},
-  {"name": "slot -X (none)", "origin": [-3.1, 0, 26.1], "dir": [0, 0, -1], "expect": "clear"},
-  {"name": "pin (positive control)", "origin": [0, 0, 26.1], "dir": [0, 0, -1], "expect": "hit", "hit_at": {"z": 5.6}, "tol": 0.05, "positive_control": true},
-  {"name": "body", "origin": [3.1, 4.0, 26.1], "dir": [0, 0, -1], "expect": "hit", "positive_control": true}
+  {
+   "name": "slot +X (none)",
+   "origin": [
+    3.1,
+    0,
+    26.1
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "clear"
+  },
+  {
+   "name": "slot -X (none)",
+   "origin": [
+    -3.1,
+    0,
+    26.1
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "clear"
+  },
+  {
+   "name": "pin (positive control)",
+   "origin": [
+    0,
+    0,
+    26.1
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "hit",
+   "hit_at": {
+    "z": 5.6
+   },
+   "tol": 0.05,
+   "positive_control": true
+  },
+  {
+   "name": "body",
+   "origin": [
+    3.1,
+    4.0,
+    26.1
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "hit",
+   "positive_control": true
+  }
  ],
- "accepted_thin": [{"min": [-4.0, -6.2, 1.5], "max": [4.0, -5.3, 3.5], "why": "wordmark"}]}
+ "accepted_thin": [
+  {
+   "min": [
+    -4.0,
+    -6.2,
+    1.5
+   ],
+   "max": [
+    4.0,
+    -5.3,
+    3.5
+   ],
+   "why": "v1 reported the letter features without gating them"
+  }
+ ],
+ "accepted_gaps": [
+  {
+   "min": [
+    -4.0,
+    -6.2,
+    1.5
+   ],
+   "max": [
+    4.0,
+    -5.3,
+    3.5
+   ],
+   "why": "v1 reported the letter features without gating them"
+  }
+ ]
+}

@@ -1,6 +1,6 @@
 # Blender and tooling gotchas
 
-Each rule cost time on a real project (Blender 5.2.1, November 2026). The kit's scripts already follow the ones marked **(kit)**; the rest are for when you write geometry or drive Blender live.
+Each rule cost time on a real project (Blender 5.2.1, November 2026; the rest came from the v0.1.1 review). The kit's scripts already follow the ones marked **(kit)**; the rest are for when you write geometry or drive Blender live.
 
 ## Running Blender
 
@@ -10,7 +10,7 @@ Each rule cost time on a real project (Blender 5.2.1, November 2026). The kit's 
 - `blender` is not on the macOS PATH. Use `/Applications/Blender.app/Contents/MacOS/Blender`, or set `BLENDER`. **(kit)**
 - Bundled docs (and the MCP's docs) can lag the installed version. Probe an operator before deciding it's missing: `bpy.ops.wm.stl_export.get_rna_type()`.
 - Pass flags like `DO_EXPORT` through the exec namespace so one script serves live and headless runs. **(kit template)**
-- Never hard-code absolute project paths in scripts. The caliper's six absolute paths all broke when its folder moved. Resolve from `__file__` or `--project`. **(kit template)**
+- Never hard-code absolute paths in scripts. The caliper's six absolute paths all broke when its folder moved, and a kit path baked into a project breaks when the skill is reinstalled or the project changes hands. Resolve the project from `__file__` or `--project`; `kit.py` passes the kit's location to Blender as `PHOTO_TO_PRINT_KIT`. **(kit)**
 
 ## The Blender MCP (optional, live)
 
@@ -25,14 +25,15 @@ Each rule cost time on a real project (Blender 5.2.1, November 2026). The kit's 
 ## Geometry
 
 - Set units first: `scale_length = 0.001`, length unit millimetres, so 1 unit = 1 mm. **(kit: `setup_mm_scene`)**
-- Booleans: try the MANIFOLD solver, fall back to EXACT, and check every result (0 non-manifold edges, 0 loose geometry, volume changed and positive). **(kit: `boolean`)**
+- Booleans: try the MANIFOLD solver (Blender 4.5 and newer), fall back to EXACT, and check every result (0 non-manifold edges, 0 loose geometry, volume changed and positive). Setting a solver the installed Blender lacks raises before any fallback runs, so ask Blender which solvers it has first. **(kit: `boolean`)**
 - Union every detail into ONE body. A plain join leaves overlapping shells that pass a simple watertight check (and report inflated volume). **(kit: print_check counts shells and self-intersections)**
 - Bevel primitives before booleans. A whole-mesh bevel after the booleans collapsed to almost nothing (clamped) or self-intersected 95 times (unclamped). **(kit: `bevel_obj`)**
 - Add pressed-in parts (pins, screw heads) after the bevel, with sharp junctions.
 - MANIFOLD booleans can leave vertices about 7e-7 mm apart. Weld with `remove_doubles(dist=1e-5)` and `dissolve_degenerate`, then re-check. **(kit: print_check welds at 1e-5)**
 - `convex_hull`: filter `geom_interior`/`geom_unused` to vertices before deleting. **(kit: `hull_obj`)**
-- Text: get the mesh with `meshes.new_from_object(evaluated)` after `depsgraph.update()`. Use a rounded bold font at small sizes. **(kit: `text_mesh`)**
+- Text: get the mesh with `meshes.new_from_object(evaluated)` after `depsgraph.update()`. Use a rounded bold font at small sizes; a font path that fails to load must stop the build, not fall back to the built-in font (whose strokes are too thin to print). Scale glyphs uniformly by letter height. **(kit: `text_mesh`, `place_text`, `find_font`)**
 - Capture object references when you create them; names auto-suffix `.001`.
+- After removing objects, update the view layer before walking its objects: stale entries come back as `None`. **(kit: `select_only`)**
 - Set mode, active object and selection explicitly before every operator. Edit-mode changes go through `bmesh` and must be written back.
 
 ## Checking
@@ -41,7 +42,8 @@ Each rule cost time on a real project (Blender 5.2.1, November 2026). The kit's 
 - `scene.ray_cast` hits objects hidden from render but skips objects hidden in the viewport. Check what you hit. (The kit checks the exported STL alone, so this can't happen there.)
 - Exclude triangle pairs that share a vertex from `BVHTree.overlap(self)`, or every edge counts as a self-intersection. **(kit)**
 - Triangulate before thickness rays and start each ray just inside the surface, or non-flat faces give false zero readings. **(kit)**
-- Thickness and gap rays: skip hits on neighbouring triangles and require an opposite-facing wall, or inside corners read as 0.005 mm walls. **(kit)**
+- Thickness and gap rays: skip hits on neighbouring triangles and require a wall within about 45 degrees of opposite, or inside corners and fillets read as 0.005 mm walls. Judge a groove by its median width (its rounded ends read narrower), and scan every non-degenerate triangle (a size cut-off misses finely tessellated fins). **(kit)**
+- A mesh can be closed and positive-volume with one face wound backwards. Check `edge.is_contiguous`. **(kit)**
 - Re-import the STL in a fresh factory-startup process. Importing into a scratch scene inside the running session crashed Blender 5.2.1. **(kit)**
 - `is_dirty` can read True right after a save. Check the file's modification time instead.
 
@@ -60,3 +62,10 @@ Each rule cost time on a real project (Blender 5.2.1, November 2026). The kit's 
 - zsh does not word-split `$VAR`: use `${=VAR}` when a variable holds several arguments.
 - `python3 -I` drops user site-packages (Pillow disappears). Run the kit's scripts without `-I`.
 - `AskUserQuestion` takes at most 4 questions per card.
+- Blender's Python ignores `PYTHONDONTWRITEBYTECODE`; set `sys.dont_write_bytecode = True` in the script, or `__pycache__` lands in the skill folder. **(kit)**
+
+## Photos
+
+- Phone photos carry an EXIF orientation: the pixels are stored sideways and shown upright. Apply it (`ImageOps.exif_transpose`) before reading any coordinate. **(kit: `photo_tools`)**
+- iPhone originals are HEIC, which Pillow can't open on its own. Ask for JPEG (Most Compatible), convert with `sips`, or install `pillow-heif`. **(kit: `info` says so per file)**
+- A ruler's FFT peak can be a harmonic: on close-up photos it reported half the true px/mm. Find the fundamental by autocorrelation, then refine. **(kit: `ruler`)**

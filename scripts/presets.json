@@ -1,0 +1,21 @@
+{
+ "_help": "Printer-process defaults: the one place these numbers live. print_check.py, kit.py and the unit tests read this file; references/print-limits.md mirrors it and a test fails if they disagree. Override per project in checks.json -> limits, or add a process here. Every process needs every key.",
+ "processes": {
+  "resin": {
+   "min_feature_mm": 0.2,
+   "min_wall_mm": 0.4,
+   "min_gap_mm": 0.3,
+   "overhang_deg": 45,
+   "overhang_gate": false,
+   "bed_layer_mm": 0.05
+  },
+  "fdm": {
+   "min_feature_mm": 0.4,
+   "min_wall_mm": 0.8,
+   "min_gap_mm": 0.5,
+   "overhang_deg": 45,
+   "overhang_gate": true,
+   "bed_layer_mm": 0.2
+  }
+ }
+}

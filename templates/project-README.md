@@ -15,15 +15,15 @@ One line: what this is, who it's for, and the current version.
 - `questions/`: the annotated images that went with each question.
 - `checks.json`: what "right" means, as tests (from CLARITY.md).
 - `scripts/build_part.py`: the geometry; every number in PARAMS with its source.
-- `exports/`: `<name>_<version>.stl` (mm, the print file) and `.glb` (preview, metres).
+- `exports/`: `<name>_<version>.stl` (mm, the print file), `.glb` (preview, metres) and `.build.json` (which build script made it; `verify` refuses a stale STL).
 - `renders/review_<name>_<version>.jpg`: photo | model | relief map, the review sheet.
 - `reports/`: print_check results.
 
-Rebuild and re-verify after any change:
+Rebuild and re-verify after any change (`<skill>` is where the photo-to-print skill is installed, for example `~/.claude/skills/photo-to-print`):
 
 ```bash
-python3 <kit>/kit.py build <this folder>
-python3 <kit>/kit.py verify <this folder>
+python3 <skill>/scripts/kit.py build <this folder>
+python3 <skill>/scripts/kit.py verify <this folder>
 ```
 
 ## Numbers and confidence

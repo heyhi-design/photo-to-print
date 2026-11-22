@@ -1,6 +1,6 @@
 # Clarity ledger: {{PART}}
 
-Nothing gets modelled until this ledger has **0 OPEN rows** and the maker has read the build summary and said go. Every answer is written here the moment the maker gives it, in his words where possible. Questions and option wording come from `references/intake-interview.md` in the skill.
+Nothing gets modelled until this ledger has **0 OPEN rows** and the maker has read the build summary and said go. Every answer is written here the moment the maker gives it, in their words where possible. Questions and option wording come from `references/intake-interview.md` in the skill.
 
 **Status key:** `OPEN` not answered yet · `CONFIRMED` the maker said it (quote or paraphrase, confirmed back) · `MEASURED` read from photos or a caliper, and the maker agreed with the number · `ASSUMED-OK` a default the maker explicitly approved after seeing it on a picture · `N/A` does not apply (say why)
 
@@ -23,7 +23,7 @@ A default is never written as `ASSUMED-OK` without the maker's yes. An ambiguous
 | A1 | What is this object, exactly? (part name, what it belongs to, kit and scale if it's a model part) | | | OPEN |
 | A2 | Where does this one come from? (kit part, real object, your scratch-build, an existing file) | | | OPEN |
 | A3 | Exact copy, improved copy, modified copy (how?), or a new design inspired by it? | | | OPEN |
-| A4 | What is the print for? (fitting to a model, spare part, product to sell, test, video prop) | | | OPEN |
+| A4 | What is the print for? (fitting to a model, spare part, product to sell, test print, display or photo prop) | | | OPEN |
 | A5 | How many, and any variants? (mirrored left/right pair, several sizes) | | | OPEN |
 | A6 | What would make you say "that's it"? What matters most: accuracy, detail, strength, or easy printing? | | | OPEN |
 
@@ -31,7 +31,7 @@ A default is never written as `ASSUMED-OK` without the maker's yes. An ambiguous
 
 | # | Question | Answer | Evidence | Status |
 |---|---|---|---|---|
-| B1 | Personal use, or sold / given away / shown on the channel? | | | OPEN |
+| B1 | Personal use, or sold / given away / posted or shown online? | | | OPEN |
 | B2 | Any brand names, logos, team marks or other trademarks on it? Keep, remove, make generic, or leave a blank area for a decal? | | | OPEN |
 | B3 | Is it a copy of a part from a commercial kit? (If it will be sold, this is the maker's call to make with proper advice; the skill flags it and does not decide.) | | | OPEN |
 
@@ -52,15 +52,15 @@ A default is never written as `ASSUMED-OK` without the maker's yes. An ambiguous
 | D2 | For each: its size, the side it comes in from, the side it leaves from, and how much clearance | | | OPEN |
 | D3 | Which openings go all the way through, and which stop partway? (one row per opening, ringed on a photo) | | | OPEN |
 | D4 | How does it attach to the model? (glue face, pin, peg, press fit) Where? | | | OPEN |
-| D5 | One solid piece, or separate pieces (moving parts, pins)? | | | OPEN |
+| D5 | One solid piece, or separate pieces (moving parts, pins)? Separate pieces are one project each. | | | OPEN |
 
-Every D answer becomes a ray or sweep test in `checks.json`, cast from the side the mating part enters (a ray only reports the first thing it hits).
+D1 to D3 answers become ray or sweep tests in `checks.json`, cast from the side the mating part enters (a ray only reports the first thing it hits). D4 and D5 are recorded here only; they have no geometric test.
 
 ## E. Features (one row per numbered feature on the annotated photos in `questions/`)
 
 Ask polarity in these words only: **"cut into the surface"** (a groove you could fill with paint) · **"stands up from the surface"** (you could catch a fingernail on its edge) · **"a step where one area sits lower"** (no line on its own, just a change of level).
 
-| # | Feature (ring no. + photo) | What it is | Cut in / stands up / step / flat print | Depth or height (mm) | Keep / nice-to-have / leave off | Status |
+| # | Feature (ring no. + photo) | What it is | Cut in / stands up / step / flat print (flat: recorded only) | Depth or height (mm) | Keep / nice-to-have / leave off | Status |
 |---|---|---|---|---|---|---|
 | E1 | | | | | | OPEN |
 
@@ -96,9 +96,9 @@ Any text: exact characters, upper/lower case, reading direction, which side read
 
 | # | Question | Answer | Evidence | Status |
 |---|---|---|---|---|
-| I1 | Files wanted: STL (always), 3MF, Blender file, preview renders for a video? | | | OPEN |
+| I1 | Files wanted: STL (always), 3MF, Blender file, preview renders? | | | OPEN |
 | I2 | Where should the project folder live? | | | OPEN |
-| I3 | Any deadline (a video shoot, a build day)? | | | OPEN |
+| I3 | Any deadline (an event, a shoot, a build day)? | | | OPEN |
 | I4 | Anything else I should know that I haven't asked? | | | OPEN |
 
 ## Change log

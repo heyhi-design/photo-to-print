@@ -4,6 +4,8 @@ Starting points, not facts about the maker's printer. Every printer, resin and s
 
 ## What `print_check` uses by default
 
+The numbers live in `scripts/presets.json`, which both `print_check.py` and `kit.py` read; this table mirrors it, and a unit test fails if the two disagree. To use your own printer's numbers, override them per project in `checks.json` → `limits`, or add a preset.
+
 | | Resin (MSLA) | FDM (0.4 mm nozzle) |
 |---|---|---|
 | Smallest detail that stands up and survives (`min_feature_mm`) | 0.2 | 0.4 |
@@ -13,8 +15,8 @@ Starting points, not facts about the maker's printer. Every printer, resin and s
 
 ## Text and fine detail
 
-- Cut-in letters: stroke (groove) at least 0.25 to 0.3 mm wide and 0.2 mm deep on resin. Paint fills 0.05 to 0.1 mm, so go deeper if it will be painted.
-- Raised letters: at least 0.2 mm high and 0.25 mm wide on resin.
+- Cut-in letters: each groove at least 0.3 mm wide (the resin `min_gap_mm`) and 0.2 mm deep. print_check fails narrower grooves inside a cut-in relief region. Paint fills 0.05 to 0.1 mm, so go deeper if it will be painted.
+- Raised letters: at least 0.2 mm high, with strokes comfortably above the 0.2 mm `min_feature_mm` (0.25 mm or more).
 - Blender's built-in font is too thin at small sizes (0.18 mm strokes at 1.3 mm letter height). Use a rounded bold font. Thickening text with Blender's `offset` makes the letter outlines overlap themselves; switch fonts instead.
 - Sharp inside points of letters (where a bowl meets a stem) will soften. That's normal; note it, don't fight it.
 
@@ -22,7 +24,7 @@ Starting points, not facts about the maker's printer. Every printer, resin and s
 
 If the maker wants a part at model scale, the size can come from two places. Ask which (CLARITY C1):
 
-- **Measure the object** (a kit part he has): build 1:1 from caliper readings.
+- **Measure the object** (a kit part the maker has): build 1:1 from caliper readings.
 - **Scale the real thing:** model size = real size ÷ scale. A real 250 mm brake caliper is 20.8 mm at 1:12, 12.5 mm at 1:20, 10.4 mm at 1:24, 5.8 mm at 1:43.
 
 At 1:43 and smaller, much real-world detail falls below the printer's limits. Decide with the maker what to keep (CLARITY G4) before modelling, not after.

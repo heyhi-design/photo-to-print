@@ -10,9 +10,9 @@ Designed and built by [Cody Clark](https://github.com/codysue) at [HeyHi](https:
 
 ## Why it asks so many questions
 
-It was built from one real project: a cast-metal miniature brake caliper, about 20.5 × 11.5 × 5.8 mm, modelled in Blender from five phone photos for a 1:1 resin print. The first version came back with three defects. The lettering was raised when it should have been cut in, because the word "emboss" meant cut in to the person who said it and raised to the agent that wrote it down. A curved line on one face was modelled as a raised bead when it was the edge of a step down. And a crossmember ran across the slot where the brake disc has to slide through, because nobody had asked what the part has to do.
+It was built from one real project: a cast-metal miniature brake caliper about 20 mm long, modelled in Blender from five phone photos for a 1:1 resin print. The first version came back with three defects. The lettering was raised when it should have been cut in, because the word "emboss" meant cut in to the person who said it and raised to the agent that wrote it down. A curved line on one face was modelled as a raised bead when it was the edge of a step down. And a crossmember ran across the slot where the brake disc has to slide through, because nobody had asked what the part has to do.
 
-Every one of those was a question, not a modelling error. The checks the agent ran were green the whole time: they compared the model to its own numbers, and the one ray meant to prove the slot was open sat directly above the crossmember, so it hit something else first and never saw it.
+Every one of those was a question, not a modelling error. The checks the agent ran were green the whole time: they compared the model to its own numbers, and the ray meant to prove the checks could see the part at the slot (a positive control) sat directly above the crossmember, so it hit the pad pin first and never saw the bar.
 
 Replayed through this kit, the same three defects fail seven checks before anyone opens a review sheet, and the approved version passes all of them. The numbers and the full story are in [`references/worked-example-caliper.md`](references/worked-example-caliper.md).
 
@@ -21,14 +21,14 @@ Replayed through this kit, the same three defects fail seven checks before anyon
 1. **Interview.** The agent reads the photos, rings and numbers every feature it can see, and asks in rounds of up to four questions, each with the ringed photo attached. Surface detail is only ever asked as "cut into the surface", "stands up from the surface", or "a step down". Every answer is read back in plain words before it's recorded in `CLARITY.md`, the project's question ledger.
 2. **Gate.** Nothing gets modelled until the ledger has no open questions and the maker has said "go" to a written summary of exactly what will be built.
 3. **Measure.** Ruler calibration from the photos, mm-grid crops, and caliper readings where they exist. Every number goes into the build script with its source and a confidence level.
-4. **Tests first.** The answers become `checks.json`: the part's size, a sweep along the path of anything that passes through it, clear rays through every opening (each with a positive control that must hit nearby solid material), and a polarity check for every cut-in, raised, or stepped feature.
+4. **Tests first.** The answers become `checks.json`: the part's size, a sweep along the path of anything that passes through it, clear rays through every opening (each naming a positive control that must hit solid material right beside it), and a polarity check for every cut-in, raised, or stepped feature.
 5. **Build and verify.** Blender builds the part headless from a parametric script. `kit.py verify` runs every check on the exported STL and draws a review sheet: the maker's photo, the model lit from the upper left, and a relief map, all at the same scale.
 6. **Review and deliver.** The maker checks the relief map against the real part. Any correction becomes a failing test first, then a fix.
 
 ## What you need
 
-- [Blender](https://www.blender.org/download/) (free). Tested with Blender 5.2.1 on macOS.
-- Python 3.9 or newer with Pillow and numpy: `python3 -m pip install --user pillow numpy`
+- [Blender](https://www.blender.org/download/) (free). Tested with Blender 5.2.1 on macOS. Blender 4.5 or newer is recommended: the faster MANIFOLD boolean solver arrived in 4.5, and on older versions the kit falls back to the EXACT solver. `kit.py doctor` tells you which you have.
+- Python 3.9 or newer with Pillow and numpy: `python3 -m pip install --user pillow numpy`. Optional: `pillow-heif`, to read iPhone HEIC photos directly.
 - Claude Code, or another agent that can read a `SKILL.md` and run shell commands.
 - A ruler or calipers, and a phone camera. A caliper reading of the part's length, width, and height is the single most useful input; photos alone get you to about ±1 mm.
 
@@ -36,7 +36,7 @@ A live Blender connector (an MCP server that drives an open Blender window) is o
 
 ## Install
 
-Clone it into your personal skills folder, or into a project's `.claude/skills/` folder:
+Clone it into your personal skills folder, or into a project's `.claude/skills/` folder. The folder must be named `photo-to-print` (a GitHub "Download ZIP" unpacks as `photo-to-print-main`; rename it):
 
 ```bash
 git clone https://github.com/heyhi-design/photo-to-print ~/.claude/skills/photo-to-print
@@ -66,12 +66,13 @@ Each part gets its own folder:
 
 ```
 my-part/
+  README.md             status, numbers and their sources, print notes
   CLARITY.md            every question asked, every answer, and your "go"
   checks.json           what "right" means, as tests
   scripts/build_part.py the geometry; every number with its source
   reference/            your original photos
   questions/            the ringed images that went with each question
-  exports/              my-part_v1.stl (mm, the print file) and .glb (preview)
+  exports/              my-part_v1.stl (mm, the print file), .glb (preview), and a build record
   renders/              the review sheet for each version
   reports/              print_check results
 ```
@@ -84,23 +85,25 @@ The agent drives these, but they work on their own too:
 |---|---|
 | `kit.py doctor` | Finds Blender and the Python packages, says what's missing |
 | `kit.py selftest` | Proves the checks catch real defects on this machine |
-| `kit.py new <folder> --name <part>` | Creates a project from the templates |
+| `kit.py new <folder> --name <part>` | Creates a project from the templates (`--process resin` or `fdm`) |
 | `kit.py build <folder>` | Runs `scripts/build_part.py` in headless Blender and exports the STL and GLB |
 | `kit.py check <folder>` | Runs every check in `checks.json` on the current STL |
+| `kit.py gate <folder>` | Counts open ledger rows, looks for the maker's "go", and lists D and E rows with no test |
 | `kit.py verify <folder>` | Check, face views, and the review sheet |
 | `photo_tools.py info <photos>` | Flags downscaled or stripped copies before anyone measures them |
 | `photo_tools.py ruler <photo> --box ... --axis y --scan 4` | Pixels per mm from the ruler ticks, and how that drifts across the photo |
 | `photo_tools.py grid <photo> --ppmm ...` | Zoomed crop with a 1 mm grid for reading sizes |
 | `photo_tools.py annotate <photo> --mark x,y,1 ...` | Numbered rings for a question image |
 
-`print_check.py` runs inside Blender's own Python on any STL, however it was made, so it's also useful on parts modelled elsewhere.
+`print_check.py` runs inside Blender's own Python on any STL, however it was made, so it's also useful on parts modelled elsewhere. Every key `checks.json` accepts is in [`references/checks-reference.md`](references/checks-reference.md).
 
 ## Limits worth knowing
 
-- **Photos are about ±1 mm.** A face sitting above the ruler reads 4 to 8% large, and two photos of the same edge can disagree by more than that. A caliper reading settles it.
-- **Printer limits are starting points.** The defaults (0.2 mm detail and 0.4 mm walls on resin, double that on FDM) are rules of thumb. Print a small test card once and put your printer's real numbers in `checks.json`.
+- **Photos are about ±1 mm.** A face sitting above the ruler reads large (the rule of thumb is in [`references/photo-guide.md`](references/photo-guide.md)), and two photos of the same edge can disagree by more than that. A caliper reading settles it.
+- **Printer limits are starting points.** The defaults in [`scripts/presets.json`](scripts/presets.json) are rules of thumb. Print a small test card once and put your printer's real numbers in `checks.json`.
 - **Tested on macOS with Blender 5.2.1.** The code looks for Blender on Windows and Linux too, but those paths haven't been run yet. Reports welcome.
 - **It flags, it doesn't decide.** If a part carries someone's trademark, or copies a part from a commercial kit, the skill marks the file personal-use and says so. Whether a copy can be sold is your call, made with proper advice.
+- **One solid body per project.** A part that prints as separate pieces is one project per piece.
 - **The judgment stays yours.** The checks prove the model matches your answers. Whether it looks right, and whether it's good enough to fit, film, or sell, is still a person looking at the part.
 
 ## Where it came from

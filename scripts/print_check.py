@@ -6,23 +6,25 @@ so it checks what will actually print, however the part was modelled.
     <blender> --background --factory-startup --python-exit-code 2 \
         --python print_check.py -- exports/part_v1.stl --spec checks.json --out reports/check_v1.json
 
-Exit code 0 = every check passed, 1 = at least one FAIL, 2 = the script crashed.
-Usually run through `kit.py verify <project>`.
+Exit code 0 = every check passed, 1 = at least one FAIL (or the spec is
+invalid), 2 = the script crashed. Usually run through `kit.py check|verify`.
+Every spec key and rule: references/checks-reference.md.
 
 Checks
-  mesh      single shell, 0 non-manifold edges, 0 loose geometry, 0 self-intersections,
-            positive volume (outward normals)
-  envelope  bounding box against spec["envelope"] (dims and/or min/max, with tol)
-  thin      material thinner than the process minimums (ray inward from every triangle)
-  gaps      grooves/clearances narrower than the process minimum (ray outward)
-  overhang  downward faces steeper than the process limit (FDM gate; resin reports only)
-  rays      single-ray assertions: "clear" or "hit" (optionally at a coordinate)
-  sweeps    a line of rays that must stay clear, with allowed-hit boxes
-
-The positive-control rule: if any ray or sweep expects "clear", at least one
-ray marked "positive_control": true must hit where expected. A clear result
-with no working positive control proves nothing (it also passes when the rays
-miss the part entirely), so the rays group FAILS without one.
+  mesh      one shell, 0 non-manifold edges, 0 loose geometry, consistent winding,
+            0 self-intersections, positive volume
+  envelope  bounding box against spec["envelope"]
+  thin      material thinner than the process minimums (ray inward from every triangle);
+            sharp wedge tips (thickness climbing from ~0) are warnings, not failures
+  gaps      grooves/clearances narrower than min_gap_mm (ray outward): FAIL unless accepted
+  overhang  downward faces steeper than the limit, in print orientation (FDM gate)
+  rays      single-ray assertions; every "clear" ray must cross the part's bounding box
+  sweeps    lines (or tubes, with radius_mm) of rays that must stay clear
+  relief    raised / cut-in polarity and depth of a region
+  glb       the preview GLB is in metres (STL dims / 1000)
+The positive-control rule: if any test expects "clear", at least one ray marked
+"positive_control" (expect "hit") must pass, and each clear test should name its
+own control beside it. A clear result that never touched the part proves nothing.
 """
 
 import argparse
@@ -32,18 +34,15 @@ import os
 import sys
 from collections import defaultdict
 
-import bmesh
-import bpy
-from mathutils import Vector
-from mathutils.bvhtree import BVHTree
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-PRESETS = {
-    # min_feature: positive detail below this usually does not form at all.
-    # min_wall: below this it forms but is fragile (review it).
-    # min_gap: grooves / clearances below this fill in (resin) or fuse (FDM).
-    "resin": {"min_feature_mm": 0.2, "min_wall_mm": 0.4, "min_gap_mm": 0.3, "overhang_deg": 45, "overhang_gate": False},
-    "fdm": {"min_feature_mm": 0.4, "min_wall_mm": 0.8, "min_gap_mm": 0.5, "overhang_deg": 45, "overhang_gate": True},
-}
+import bmesh  # noqa: E402
+import bpy  # noqa: E402
+from mathutils import Euler, Vector  # noqa: E402
+from mathutils.bvhtree import BVHTree  # noqa: E402
+
+import spec as specmod  # noqa: E402
 
 
 def parse_args():
@@ -52,7 +51,7 @@ def parse_args():
     ap.add_argument("stl")
     ap.add_argument("--spec", default=None)
     ap.add_argument("--out", default=None)
-    ap.add_argument("--process", default=None, help="resin | fdm (overrides spec)")
+    ap.add_argument("--process", default=None, help="a process in presets.json (overrides the spec)")
     ap.add_argument("--glb", default=None, help="preview GLB to check is in metres (STL dims / 1000)")
     return ap.parse_args(argv)
 
@@ -61,17 +60,10 @@ def load_mesh(path):
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
     bpy.ops.wm.stl_import(filepath=path)
-    obs = [o for o in bpy.context.scene.objects if o.type == 'MESH']
-    if not obs:
-        raise RuntimeError(f"no mesh imported from {path}")
     bm = bmesh.new()
-    for o in obs:
-        tmp = bmesh.new()
-        tmp.from_mesh(o.data)
-        tmp.transform(o.matrix_world)
-        me = bpy.data.meshes.new("tmp")
-        tmp.to_mesh(me)
-        tmp.free()
+    for o in [o for o in bpy.context.scene.objects if o.type == 'MESH']:
+        me = o.data.copy()
+        me.transform(o.matrix_world)
         bm.from_mesh(me)
         bpy.data.meshes.remove(me)
     bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
@@ -90,8 +82,7 @@ def shells(bm):
         stack = [f]
         seen.add(f.index)
         while stack:
-            cur = stack.pop()
-            for e in cur.edges:
+            for e in stack.pop().edges:
                 for g in e.link_faces:
                     if g.index not in seen:
                         seen.add(g.index)
@@ -99,14 +90,17 @@ def shells(bm):
     return count
 
 
-def check_mesh(bm, bvh):
+# ---------------------------------------------------------------- checks ----
+
+def check_mesh(ctx):
+    bm, bvh = ctx["bm"], ctx["bvh"]
     nm = sum(1 for e in bm.edges if len(e.link_faces) != 2)
+    flipped = sum(1 for e in bm.edges if len(e.link_faces) == 2 and not e.is_contiguous)
     loose_v = sum(1 for v in bm.verts if not v.link_edges)
     loose_e = sum(1 for e in bm.edges if not e.link_faces)
     vol = bm.calc_volume(signed=True)
-    tri_verts = [set(v.index for v in f.verts) for f in bm.faces]
-    pairs = bvh.overlap(bvh)
-    real = [(i, j) for i, j in pairs if i < j and not (tri_verts[i] & tri_verts[j])]
+    tri_verts = ctx["vert_sets"]
+    real = [(i, j) for i, j in bvh.overlap(bvh) if i < j and not (tri_verts[i] & tri_verts[j])]
     sample = []
     for i, _ in real[:5]:
         c = bm.faces[i].calc_center_median()
@@ -114,38 +108,33 @@ def check_mesh(bm, bvh):
     n_shells = shells(bm)
     fails = []
     if n_shells != 1:
-        fails.append(f"{n_shells} separate shells (a printable part is ONE body: union, don't join)")
+        fails.append(f"{n_shells} separate shells (a printable part is ONE body: union, don't join; "
+                     f"separate pieces are separate projects)")
     if nm:
         fails.append(f"{nm} non-manifold edges")
+    if flipped:
+        fails.append(f"{flipped} edges where neighbouring faces wind opposite ways (some normals are flipped)")
     if loose_v or loose_e:
         fails.append(f"loose geometry: {loose_v} verts, {loose_e} edges")
     if real:
         fails.append(f"{len(real)} self-intersecting triangle pairs, e.g. at {sample[:2]}")
     if vol <= 0:
         fails.append("volume is not positive (normals point inward)")
-    return {"shells": n_shells, "non_manifold_edges": nm, "loose_verts": loose_v, "loose_edges": loose_e,
-            "self_intersections": len(real), "self_int_sample": sample,
-            "volume_mm3": round(vol, 3), "triangles": len(bm.faces),
+    return {"shells": n_shells, "non_manifold_edges": nm, "inconsistent_winding_edges": flipped,
+            "loose_verts": loose_v, "loose_edges": loose_e, "self_intersections": len(real),
+            "self_int_sample": sample, "volume_mm3": round(vol, 3), "triangles": len(bm.faces),
             "pass": not fails, "fails": fails}
 
 
-def bbox(bm):
-    xs = [v.co.x for v in bm.verts]
-    ys = [v.co.y for v in bm.verts]
-    zs = [v.co.z for v in bm.verts]
-    return [min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)]
-
-
-def check_envelope(bm, spec):
-    mn, mx = bbox(bm)
+def check_envelope(ctx):
+    mn, mx = ctx["bbox"]
     dims = [mx[i] - mn[i] for i in range(3)]
-    out = {"min": [round(v, 3) for v in mn], "max": [round(v, 3) for v in mx],
-           "dims": [round(v, 3) for v in dims]}
-    env = spec.get("envelope")
+    out = {"min": [round(v, 3) for v in mn], "max": [round(v, 3) for v in mx], "dims": [round(v, 3) for v in dims]}
+    env = ctx["spec"].get("envelope")
     if not env:
         out.update({"pass": True, "note": "no envelope in spec: dimensions reported, not checked"})
         return out
-    tol = float(env.get("tol_mm", 0.3))
+    tol = float(env["tol_mm"])
     fails = []
     for key, got in (("dims_mm", dims), ("min_mm", mn), ("max_mm", mx)):
         want = env.get(key)
@@ -159,129 +148,194 @@ def check_envelope(bm, spec):
     return out
 
 
+TINY_MM2 = 0.01        # a thin/gap region smaller than this is a corner speck, not a feature
+
+
 def in_box(p, box):
     return all(box["min"][i] - 1e-9 <= p[i] <= box["max"][i] + 1e-9 for i in range(3))
 
 
-def cluster(samples, accepted):
-    """samples: list of (point, value). Groups on a 0.5 mm grid, worst first."""
-    groups = defaultdict(list)
-    for p, d in samples:
-        groups[(round(p.x * 2) / 2, round(p.y * 2) / 2, round(p.z * 2) / 2)].append(d)
-    rows = []
-    for k, ds in groups.items():
-        reason = next((a.get("why", "accepted") for a in accepted if in_box(k, a)), None)
-        rows.append({"at_mm": list(k), "tris": len(ds), "min_mm": round(min(ds), 3), "accepted": reason})
-    rows.sort(key=lambda r: r["min_mm"])
-    return rows
-
-
-def facing_hit(bvh, bm, f, origin, direction, max_dist, vert_sets, exiting):
-    """First hit along direction that is a genuinely opposite wall: skips
-    triangles that share a vertex with f (corner grazes at concave edges) and
-    hits whose normal is not roughly opposed (angled neighbours)."""
+def facing_hit(bvh, f_index, origin, direction, max_dist, vert_sets, exiting):
+    """Distance to the first genuinely opposite wall along direction. Skips
+    triangles sharing a vertex with the start face (corner grazes) and walls
+    whose normal is not within ~45 deg of opposite (fillets, angled neighbours)."""
     start, travelled = origin, 0.0
-    for _ in range(4):
+    for _ in range(6):
         loc, nrm, idx, dist = bvh.ray_cast(start, direction, max_dist - travelled)
         if loc is None:
             return None
         travelled += dist
-        if idx is not None and (vert_sets[idx] & vert_sets[f.index]):
+        if idx is not None and (vert_sets[idx] & vert_sets[f_index]):
             start = loc + direction * 1e-5
             continue
         facing = nrm.dot(direction)
-        # inward scan (exiting=True): leaves the material through a wall facing away from f.
-        # outward scan: meets a wall facing back toward f across the gap.
-        if (exiting and facing > 0.3) or (not exiting and facing < -0.3):
+        if (exiting and facing > 0.7) or (not exiting and facing < -0.7):
             return travelled
-        start = loc + direction * 1e-5        # grazing / same-facing hit: look further
+        start = loc + direction * 1e-5
     return None
 
 
-def thickness_scans(bm, bvh, limits, spec):
-    """Inward ray from each triangle centroid: local material thickness.
-    Outward ray: width of the gap/groove in front of the face."""
+def cluster(samples):
+    """samples: [(point, value, area)] -> rows on a 0.5 mm grid, worst first, with the real extent."""
+    groups = defaultdict(list)
+    for p, d, a in samples:
+        groups[(round(p.x * 2) / 2, round(p.y * 2) / 2, round(p.z * 2) / 2)].append((p, d, a))
+    rows = []
+    for _, items in groups.items():
+        ds = sorted(d for _, d, _ in items)
+        worst = min(items, key=lambda t: t[1])[0]
+        xs, ys, zs = ([p[k] for p, _, _ in items] for k in range(3))
+        rows.append({"worst_at_mm": [round(worst.x, 3), round(worst.y, 3), round(worst.z, 3)],
+                     "extent_min_mm": [round(min(xs), 3), round(min(ys), 3), round(min(zs), 3)],
+                     "extent_max_mm": [round(max(xs), 3), round(max(ys), 3), round(max(zs), 3)],
+                     "tris": len(items), "area_mm2": round(sum(a for _, _, a in items), 4),
+                     "min_mm": round(ds[0], 3), "median_mm": round(ds[len(ds) // 2], 3),
+                     "p90_mm": round(ds[int(len(ds) * 0.9)] if len(ds) > 1 else ds[0], 3)})
+    rows.sort(key=lambda r: r["min_mm"])
+    return rows
+
+
+def check_thin_and_gaps(ctx):
+    bm, bvh, limits, spec = ctx["bm"], ctx["bvh"], ctx["limits"], ctx["spec"]
     min_feat, min_wall, min_gap = limits["min_feature_mm"], limits["min_wall_mm"], limits["min_gap_mm"]
-    vert_sets = [set(v.index for v in g.verts) for g in bm.faces]
-    thin, gaps = [], []
+    vs = ctx["vert_sets"]
+    thin, gaps, acc_thin, acc_gap = [], [], 0, 0
     for f in bm.faces:
-        if f.calc_area() < 2e-4:
+        area = f.calc_area()
+        if area < 1e-9:                       # degenerate only; fine tessellation is still scanned
             continue
         c, n = f.calc_center_median(), f.normal
-        d = facing_hit(bvh, bm, f, c - n * 1e-5, -n, max(min_wall, 1.0) * 2, vert_sets, True)
+        d = facing_hit(bvh, f.index, c - n * 1e-5, -n, max(min_wall, 1.0) * 2, vs, True)
         if d is not None and d < min_wall:
-            thin.append((c, d))
-        # outward: the wall across the gap faces back toward f (normal opposite to travel)
-        d = facing_hit(bvh, bm, f, c + n * 1e-5, n, max(min_gap, 1.0) * 2, vert_sets, False)
+            if any(in_box(c, b) for b in spec["accepted_thin"]):
+                acc_thin += 1
+            else:
+                thin.append((c, d, area))
+        d = facing_hit(bvh, f.index, c + n * 1e-5, n, max(min_gap, 1.0) * 2, vs, False)
         if d is not None and d < min_gap:
-            gaps.append((c, d))
-    accepted = spec.get("accepted_thin", [])
-    thin_rows = cluster(thin, accepted)
-    gap_rows = cluster(gaps, spec.get("accepted_gaps", []))
-    below_feat = [r for r in thin_rows if r["min_mm"] < min_feat and not r["accepted"]]
-    thin_out = {"min_feature_mm": min_feat, "min_wall_mm": min_wall,
-                "regions_below_min_wall": len(thin_rows),
-                "regions_below_min_feature_unaccepted": len(below_feat),
-                "worst": thin_rows[:10],
-                "pass": not below_feat,
-                "fails": [f"material {r['min_mm']} mm thick near {r['at_mm']} (< {min_feat}; thicken it, "
-                          f"or record it in the clarity ledger and add it to accepted_thin)" for r in below_feat[:5]]}
-    gap_out = {"min_gap_mm": min_gap, "regions_below_min_gap": len(gap_rows), "worst": gap_rows[:10],
-               "pass": True,
-               "warns": [f"gap {r['min_mm']} mm near {r['at_mm']} may fill in / fuse" for r in gap_rows
-                         if not r["accepted"]][:5]}
+            if any(in_box(c, b) for b in spec["accepted_gaps"]):
+                acc_gap += 1
+            else:
+                gaps.append((c, d, area))
+    thin_rows = cluster(thin)
+    fails, warns = [], []
+    for r in thin_rows:
+        if r["min_mm"] >= min_feat:
+            r["kind"] = "fragile"
+        elif r["area_mm2"] < TINY_MM2 or (r["min_mm"] < min_feat / 2 and r["p90_mm"] >= 3 * max(r["min_mm"], 0.01)):
+            r["kind"] = "tip"           # thickness climbs from ~0 or covers a speck: a sharp corner that rounds off
+        else:
+            r["kind"] = "too thin"
+    for r in thin_rows:
+        if r["kind"] == "too thin" and len(fails) < 6:
+            fails.append(f"material {r['min_mm']} mm thick at {r['worst_at_mm']} (region {r['extent_min_mm']} to "
+                         f"{r['extent_max_mm']}; < {min_feat}): thicken it, or record it in CLARITY G4 and add a box "
+                         f"around it to accepted_thin")
+    tips = [r for r in thin_rows if r["kind"] == "tip"]
+    if tips:
+        warns.append(f"{len(tips)} sharp wedge tip(s) thinner than {min_feat} mm, worst at {tips[0]['worst_at_mm']}: "
+                     f"these round off on a print")
+    thin_out = {"min_feature_mm": min_feat, "min_wall_mm": min_wall, "regions": len(thin_rows),
+                "too_thin": sum(1 for r in thin_rows if r["kind"] == "too thin"), "tips": len(tips),
+                "fragile": sum(1 for r in thin_rows if r["kind"] == "fragile"), "accepted_tris": acc_thin,
+                "worst": thin_rows[:10], "pass": not any(r["kind"] == "too thin" for r in thin_rows),
+                "fails": fails, "warns": warns}
+    gap_rows = cluster(gaps)
+    for r in gap_rows:
+        # A groove is judged on its typical width: rounded groove ends read narrower than the groove.
+        # A speck of area is an inside corner (a crevice), which simply fills: a warning, not a failure.
+        r["kind"] = "crevice" if r["area_mm2"] < TINY_MM2 else ("narrow" if r["median_mm"] < min_gap else "end")
+    narrow = sorted([r for r in gap_rows if r["kind"] == "narrow"], key=lambda r: r["median_mm"])
+    crevices = [r for r in gap_rows if r["kind"] == "crevice"]
+    gfails = [f"groove or gap about {r['median_mm']} mm wide (narrowest {r['min_mm']}) at {r['worst_at_mm']} "
+              f"(region {r['extent_min_mm']} to {r['extent_max_mm']}; < {min_gap}): it will fill in or fuse. Widen "
+              f"it, or record it in CLARITY G4 and add a box around it to accepted_gaps" for r in narrow[:6]]
+    gwarns = [f"{len(crevices)} hairline inside corner(s) narrower than {min_gap} mm, first at "
+              f"{crevices[0]['worst_at_mm']}: these fill in on a print"] if crevices else []
+    gap_out = {"min_gap_mm": min_gap, "regions": len(narrow), "crevices": len(crevices), "accepted_tris": acc_gap,
+               "worst": narrow[:10], "pass": not narrow, "fails": gfails, "warns": gwarns}
     return thin_out, gap_out
 
 
-def check_overhang(bm, limits):
+def check_overhang(ctx):
+    bm, limits, spec = ctx["bm"], ctx["limits"], ctx["spec"]
     deg = limits["overhang_deg"]
-    zmin = min(v.co.z for v in bm.verts)
-    lim = -math.sin(math.radians(90 - deg))      # normal.z below this = steeper than the limit
-    total = sum(f.calc_area() for f in bm.faces)
-    over = 0.0
+    rot = Euler([math.radians(a) for a in spec["print_rotation_deg"]], 'XYZ').to_matrix()
+    lim = -math.sin(math.radians(deg))        # normal.z below this: steeper than `deg` from vertical
+    zs = [(rot @ v.co).z for v in bm.verts]
+    zmin = min(zs)
+    total, samples = 0.0, []
     for f in bm.faces:
-        if f.normal.z < lim and f.calc_center_median().z > zmin + 0.02:
-            over += f.calc_area()
-    out = {"limit_deg_from_vertical": deg, "unsupported_mm2": round(over, 3),
-           "share_pct": round(100 * over / total, 2) if total else 0.0, "gate": limits["overhang_gate"]}
+        a = f.calc_area()
+        total += a
+        nz = (rot @ f.normal).z
+        c = f.calc_center_median()
+        if nz < lim and (rot @ c).z > zmin + limits["bed_layer_mm"]:
+            if not any(in_box(c, b) for b in spec["accepted_overhang"]):
+                samples.append((c, -nz, a))
+    rows = cluster(samples)
+    over = sum(a for _, _, a in samples)
+    out = {"limit_deg_from_vertical": deg, "print_rotation_deg": spec["print_rotation_deg"],
+           "unsupported_mm2": round(over, 3), "share_pct": round(100 * over / total, 2) if total else 0.0,
+           "gate": limits["overhang_gate"],
+           "worst_regions": [{"at_mm": r["worst_at_mm"], "area_mm2": r["area_mm2"]}
+                             for r in sorted(rows, key=lambda r: -r["area_mm2"])[:5]]}
     out["pass"] = (over < 0.01) if limits["overhang_gate"] else True
     if limits["overhang_gate"] and over >= 0.01:
-        out["fails"] = [f"{over:.2f} mm2 of downward faces steeper than {deg} deg need supports"]
+        where = ", ".join(f"{w['at_mm']} ({w['area_mm2']} mm2)" for w in out["worst_regions"][:3])
+        out["fails"] = [f"{over:.2f} mm2 of downward faces steeper than {deg} deg from vertical need supports; "
+                        f"largest at {where}. Reorient (print_rotation_deg), chamfer, or accept with accepted_overhang"]
     return out
 
 
-def cast(bvh, origin, direction, max_dist=1000.0):
-    d = Vector(direction).normalized()
-    loc, nrm, idx, dist = bvh.ray_cast(Vector(origin), d, max_dist)
-    return loc, nrm, dist
+def seg_crosses_box(origin, d, length, mn, mx):
+    """Does the segment origin + t*d, 0 <= t <= length, pass through the box?"""
+    t0, t1 = 0.0, length
+    for i in range(3):
+        if abs(d[i]) < 1e-12:
+            if origin[i] < mn[i] or origin[i] > mx[i]:
+                return False
+            continue
+        a, b = (mn[i] - origin[i]) / d[i], (mx[i] - origin[i]) / d[i]
+        t0, t1 = max(t0, min(a, b)), min(t1, max(a, b))
+        if t0 > t1:
+            return False
+    return True
 
 
-def check_rays(bvh, spec):
-    rays, sweeps = spec.get("rays", []), spec.get("sweeps", [])
+def check_rays(ctx):
+    spec, bvh = ctx["spec"], ctx["bvh"]
+    mn, mx = ctx["bbox"]
+    pad_mn, pad_mx = [v - 0.01 for v in mn], [v + 0.01 for v in mx]
+    rays, sweeps = spec["rays"], spec["sweeps"]
     if not rays and not sweeps:
         return {"pass": True, "note": "no rays or sweeps in spec"}
-    results, fails = [], []
-    has_clear = any(r.get("expect") == "clear" for r in rays) or bool(sweeps)
-    controls_ok = 0
+    results, fails, warns = [], [], []
+    passed = {}
     for r in rays:
-        loc, nrm, dist = cast(bvh, r["origin"], r["dir"], r.get("max_dist", 1000.0))
+        d = Vector(r["dir"]).normalized()
+        loc, nrm, idx, dist = bvh.ray_cast(Vector(r["origin"]), d, r["max_dist"])
         hit = loc is not None
-        good = (not hit) if r["expect"] == "clear" else hit
         detail = {"name": r["name"], "expect": r["expect"], "hit": hit,
                   "hit_point": [round(v, 3) for v in loc] if hit else None}
-        if hit and r["expect"] == "hit" and r.get("hit_at"):
-            tol = float(r.get("tol", 0.05))
+        if r["expect"] == "clear":
+            good = not hit
+            if good and not seg_crosses_box(r["origin"], d, r["max_dist"], pad_mn, pad_mx):
+                good = False
+                detail["mismatch"] = "never crosses the part's bounding box, so 'clear' proves nothing (typo in origin/dir?)"
+        else:
+            good = hit
             for ax, want in r["hit_at"].items():
-                got = loc["xyz".index(ax)]
-                if abs(got - want) > tol:
+                if hit and abs(loc["xyz".index(ax)] - want) > r["tol"]:
                     good = False
-                    detail["mismatch"] = f"{ax} = {got:.3f}, expected {want} (tol {tol})"
+                    detail["mismatch"] = f"{ax} = {loc['xyz'.index(ax)]:.3f}, expected {want} (tol {r['tol']})"
         detail["pass"] = good
-        if r.get("why"):
-            detail["why"] = r["why"]
+        for k in ("why", "control"):
+            if r.get(k):
+                detail[k] = r[k]
         if r.get("positive_control"):
             detail["positive_control"] = True
-            controls_ok += 1 if good else 0
+        passed[r["name"]] = good
         if not good:
             fails.append(f"ray '{r['name']}': expected {r['expect']}, "
                          + (detail.get("mismatch") or ("hit at " + str(detail["hit_point"]) if hit else "no hit")))
@@ -289,111 +343,134 @@ def check_rays(bvh, spec):
     sweep_out = []
     for s in sweeps:
         a, b = Vector(s["from"]), Vector(s["to"])
-        length = (b - a).length
-        n = max(1, int(round(length / float(s.get("step", 0.1)))))
-        blocked = []
+        d = Vector(s["dir"]).normalized()
+        n = max(1, int(round((b - a).length / s["step"])))
+        offsets = [Vector((0, 0, 0))]
+        if s["radius_mm"] > 0:
+            helper = Vector((1, 0, 0)) if abs(d.x) < 0.9 else Vector((0, 1, 0))
+            u = d.cross(helper).normalized()
+            w = d.cross(u).normalized()
+            offsets += [(u * math.cos(k * math.pi / 4) + w * math.sin(k * math.pi / 4)) * s["radius_mm"]
+                        for k in range(8)]
+        blocked, missed, total = [], 0, 0
         for k in range(n + 1):
-            p = a.lerp(b, k / n)
-            loc, nrm, dist = cast(bvh, p, s["dir"], s.get("max_dist", 1000.0))
-            if loc is None:
-                continue
-            if any(in_box(loc, box) for box in s.get("allow_hits_in", [])):
-                continue
-            blocked.append({"ray_from": [round(v, 2) for v in p], "hit": [round(v, 3) for v in loc]})
-        good = not blocked
-        sweep_out.append({"name": s["name"], "rays": n + 1, "blocked": len(blocked), "first_blocks": blocked[:5],
-                          "why": s.get("why"), "pass": good})
-        if not good:
-            fails.append(f"sweep '{s['name']}': {len(blocked)} of {n + 1} rays blocked, first at {blocked[0]['hit']}")
-    if has_clear and controls_ok == 0:
-        fails.append("no working positive control: add a ray with \"positive_control\": true that must hit a "
-                     "known surface, or the 'clear' results prove nothing")
-    return {"rays": results, "sweeps": sweep_out, "positive_controls_passing": controls_ok,
-            "pass": not fails, "fails": fails}
+            base = a.lerp(b, k / n)
+            for off in offsets:
+                p = base + off
+                total += 1
+                if not seg_crosses_box(p, d, s["max_dist"], pad_mn, pad_mx):
+                    missed += 1
+                    continue
+                loc, nrm, idx, dist = bvh.ray_cast(p, d, s["max_dist"])
+                if loc is None or any(in_box(loc, box) for box in s["allow_hits_in"]):
+                    continue
+                blocked.append({"ray_from": [round(v, 2) for v in p], "hit": [round(v, 3) for v in loc]})
+        good = not blocked and not missed
+        sweep_out.append({"name": s["name"], "rays": total, "blocked": len(blocked), "missed_part": missed,
+                          "first_blocks": blocked[:5], "why": s.get("why"), "pass": good})
+        passed[s["name"]] = good
+        if blocked:
+            fails.append(f"sweep '{s['name']}': {len(blocked)} of {total} rays blocked, first at {blocked[0]['hit']}")
+        if missed:
+            fails.append(f"sweep '{s['name']}': {missed} of {total} rays never cross the part's bounding box "
+                         f"(check from/to/dir; a ray that misses the part proves nothing)")
+    controls = [r for r in rays if r.get("positive_control") and r["expect"] == "hit"]
+    clears = [r for r in rays if r["expect"] == "clear"] + sweeps
+    if clears and not any(passed[c["name"]] for c in controls):
+        fails.append("no working positive control: add a ray with \"positive_control\": true that must hit solid "
+                     "material beside each opening, or the 'clear' results prove nothing")
+    for t in clears:
+        c = t.get("control")
+        if c and not passed.get(c, False):
+            fails.append(f"'{t['name']}': its control '{c}' did not hit where expected, so its clear result is "
+                         f"unproven")
+    return {"rays": results, "sweeps": sweep_out,
+            "positive_controls_passing": sum(1 for c in controls if passed[c["name"]]),
+            "pass": not fails, "fails": fails, "warns": warns}
 
 
-def check_relief(bvh, spec):
-    """Relief polarity: is a region raised above, cut into, or flush with the
-    face around it? Turns a confirmed ledger answer ("the letters are cut in")
-    into a test, so polarity cannot silently flip between question and print.
+def relief_grid(r):
+    """Yield (origin, direction, along_n_height_fn) for a relief row in either form."""
+    if "normal" in r:
+        n = Vector(r["normal"]).normalized()
+        up = Vector(r.get("up") or ((0, 1, 0) if abs(n.z) > 0.9 else (0, 0, 1)))
+        right = up.cross(n).normalized()
+        up = n.cross(right).normalized()
+        c = Vector(r["center_mm"])
+        w, h = r["size_mm"]
+        surf = Vector(r["surface_point"]).dot(n)
+        us = [-w / 2 + k * r["step_mm"] for k in range(int(w / r["step_mm"]) + 1)]
+        vs = [-h / 2 + k * r["step_mm"] for k in range(int(h / r["step_mm"]) + 1)]
+        for u in us:
+            for v in vs:
+                p = c + right * u + up * v
+                yield p + n * 50.0, -n, (lambda loc, n=n, surf=surf: loc.dot(n) - surf)
+        return
+    ax = "xyz".index(r["axis"])
+    s = -1.0 if r["viewer"] == "-" else 1.0
+    others = [i for i in range(3) if i != ax]
+    (u0, u1), (v0, v1) = r["region"]["xyz"[others[0]]], r["region"]["xyz"[others[1]]]
+    step = r["step_mm"]
+    d = [0.0, 0.0, 0.0]
+    d[ax] = -s
+    for i in range(int((u1 - u0) / step + 1e-9) + 1):
+        for j in range(int((v1 - v0) / step + 1e-9) + 1):
+            o = [0.0, 0.0, 0.0]
+            o[others[0]], o[others[1]] = u0 + i * step, v0 + j * step
+            o[ax] = r["surface"] + s * 50.0
+            yield Vector(o), Vector(d), (lambda loc, ax=ax, s=s: (loc[ax] - r["surface"]) * s)
 
-    {"name": ..., "axis": "y", "viewer": "-",        # looking at the -Y face from -Y
-     "region": {"x": [-3.8, 3.8], "z": [1.8, 3.2]},  # the two other axes, world mm
-     "surface": -5.75,                                # the surrounding face's coordinate on axis
-     "expect": "recessed" | "raised", "depth_mm": 0.2, "step_mm": 0.05}
-    """
-    items = spec.get("relief", [])
+
+def check_relief(ctx):
+    """Relief polarity: is a region raised above, cut into, or flush with the face
+    around it? Turns a confirmed ledger answer into a test."""
+    items, bvh = ctx["spec"]["relief"], ctx["bvh"]
     if not items:
         return {"pass": True, "note": "no relief checks in spec"}
     out, fails = [], []
     for r in items:
-        ax = "xyz".index(r["axis"])
-        s = -1.0 if r.get("viewer", "-") == "-" else 1.0
-        others = [i for i in range(3) if i != ax]
-        (u0, u1) = r["region"]["xyz"[others[0]]]
-        (v0, v1) = r["region"]["xyz"[others[1]]]
-        step = float(r.get("step_mm", 0.05))
-        tol = float(r.get("tol_mm", 0.05))
-        surface = float(r["surface"])
-        direction = [0.0, 0.0, 0.0]
-        direction[ax] = -s                         # travel from the viewer toward the part
+        tol = r["tol_mm"]
         counts = {"raised": 0, "recessed": 0, "flush": 0, "miss": 0}
         heights = {"raised": [], "recessed": []}
-        u = u0
-        while u <= u1 + 1e-9:
-            v = v0
-            while v <= v1 + 1e-9:
-                o = [0.0, 0.0, 0.0]
-                o[others[0]], o[others[1]] = u, v
-                o[ax] = surface + s * 50.0
-                loc, nrm, dist = cast(bvh, o, direction, 100.0)
-                if loc is None:
-                    counts["miss"] += 1
-                else:
-                    h = (loc[ax] - surface) * s     # + = toward the viewer = stands up
-                    k = "raised" if h > tol else "recessed" if h < -tol else "flush"
-                    counts[k] += 1
-                    if k in heights:
-                        heights[k].append(abs(h))
-                v += step
-            u += step
+        for o, d, height in relief_grid(r):
+            loc, nrm, idx, dist = bvh.ray_cast(o, d, 100.0)
+            if loc is None:
+                counts["miss"] += 1
+                continue
+            h = height(loc)
+            k = "raised" if h > tol else "recessed" if h < -tol else "flush"
+            counts[k] += 1
+            if k in heights:
+                heights[k].append(abs(h))
         hits = counts["raised"] + counts["recessed"] + counts["flush"]
         share = {k: round(counts[k] / hits, 3) if hits else 0.0 for k in ("raised", "recessed", "flush")}
-        want, other = r["expect"], ("raised" if r["expect"] == "recessed" else "recessed")
+        want = r["expect"]
+        other = "raised" if want == "recessed" else "recessed"
         med = sorted(heights[want])[len(heights[want]) // 2] if heights[want] else None
-        good = hits > 0 and share[want] >= float(r.get("min_share", 0.05)) and share[other] < 0.01
-        if good and r.get("depth_mm") is not None and med is not None:
-            good = abs(med - float(r["depth_mm"])) <= max(tol, 0.05)
-        row = {"name": r["name"], "expect": want, "share": share, "median_relief_mm": round(med, 3) if med else None,
-               "expected_relief_mm": r.get("depth_mm"), "rays": hits + counts["miss"], "pass": good}
+        polarity_ok = hits > 0 and share[want] >= r["min_share"] and share[other] < 0.01
+        depth_ok = r.get("depth_mm") is None or (med is not None and abs(med - r["depth_mm"]) <= max(tol, 0.05))
+        good = polarity_ok and depth_ok
+        row = {"name": r["name"], "expect": want, "share": share,
+               "median_relief_mm": round(med, 3) if med is not None else None,
+               "expected_relief_mm": r.get("depth_mm"), "rays": hits + counts["miss"], "hits": hits, "pass": good}
         if r.get("why"):
             row["why"] = r["why"]
         out.append(row)
-        if not good:
+        if hits == 0:
+            fails.append(f"relief '{r['name']}': no ray hit the part in this region (check axis, viewer, region)")
+        elif not polarity_ok:
             found = max(("raised", "recessed"), key=lambda k: share[k])
-            fails.append(f"relief '{r['name']}': expected {want}"
-                         + (f" {r['depth_mm']} mm" if r.get("depth_mm") is not None else "")
-                         + f", found {share['raised'] * 100:.0f}% raised / {share['recessed'] * 100:.0f}% recessed"
+            fails.append(f"relief '{r['name']}': expected {want}, found {share['raised'] * 100:.0f}% raised / "
+                         f"{share['recessed'] * 100:.0f}% recessed"
                          + (f" (mostly {found})" if share[found] > 0 else " (flat)"))
+        elif not depth_ok:
+            fails.append(f"relief '{r['name']}': {want} as expected, but {med:.3f} mm deep/high, expected "
+                         f"{r['depth_mm']} mm")
     return {"checks": out, "pass": not fails, "fails": fails}
 
 
-def drop_examples(spec):
-    """Template placeholders (names starting with _example) are never run as tests."""
-    dropped = 0
-    for key in ("rays", "sweeps", "relief"):
-        keep = [r for r in spec.get(key, []) if not str(r.get("name", "")).startswith("_example")]
-        dropped += len(spec.get(key, [])) - len(keep)
-        spec[key] = keep
-    env = spec.get("envelope") or {}
-    if env and all(v is None for v in env.get("dims_mm", [None])) and "min_mm" not in env and "max_mm" not in env:
-        spec.pop("envelope")
-    return dropped
-
-
 def check_glb(path, stl_dims):
-    """The GLB preview must be in metres: glTF ignores Blender's unit scale, and
-    an unscaled export comes out 1000x too large."""
+    """The GLB preview must be in metres: glTF ignores Blender's unit scale."""
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
     bpy.ops.import_scene.gltf(filepath=path)
@@ -402,7 +479,7 @@ def check_glb(path, stl_dims):
         return {"pass": False, "fails": ["GLB has no mesh"]}
     dims = [max(p[i] for p in pts) - min(p[i] for p in pts) for i in range(3)]
     want = sorted(d / 1000.0 for d in stl_dims)
-    got = sorted(dims)                      # glTF swaps Y/Z (Y-up), so compare sorted extents
+    got = sorted(dims)                       # glTF is Y-up, so compare sorted extents
     good = all(abs(g - w) <= max(1e-6, w * 1e-3) for g, w in zip(got, want))
     out = {"dims_m": [round(d, 6) for d in dims], "expected_m": [round(w, 6) for w in want], "pass": good}
     if not good:
@@ -411,62 +488,82 @@ def check_glb(path, stl_dims):
     return out
 
 
-def main():
-    a = parse_args()
-    spec = json.load(open(a.spec)) if a.spec else {}
-    dropped = drop_examples(spec)
-    process = (a.process or spec.get("process") or "resin").lower()
-    limits = dict(PRESETS[process])
-    limits.update({k: v for k, v in spec.get("limits", {}).items() if k in limits})
-    bm = load_mesh(a.stl)
-    bvh = BVHTree.FromBMesh(bm)
-    rep = {"file": os.path.abspath(a.stl), "process": process, "limits": limits}
-    rep["mesh"] = check_mesh(bm, bvh)
-    rep["envelope"] = check_envelope(bm, spec)
-    rep["thin"], rep["gaps"] = thickness_scans(bm, bvh, limits, spec)
-    rep["overhang"] = check_overhang(bm, limits)
-    rep["rays"] = check_rays(bvh, spec)
-    rep["relief"] = check_relief(bvh, spec)
-    bm.free()
-    if a.glb and os.path.exists(a.glb):
-        rep["glb"] = check_glb(a.glb, rep["envelope"]["dims"])
-    fails, warns = [], []
-    for key in ("mesh", "envelope", "thin", "gaps", "overhang", "rays", "relief", "glb"):
-        if key not in rep:
-            continue
-        fails += [f"[{key}] {m}" for m in rep[key].get("fails", [])]
-        warns += [f"[{key}] {m}" for m in rep[key].get("warns", [])]
-    if dropped:
-        warns.append(f"[spec] {dropped} template _example entries ignored: write the real tests from CLARITY.md")
-    if not spec.get("rays") and not spec.get("sweeps") and not spec.get("relief"):
-        warns.append("[spec] no function or relief tests: this only proves the mesh is printable, not that it is right")
-    rep["summary"] = {"pass": not fails, "fails": fails, "warns": warns}
+CHECKS = [("mesh", check_mesh), ("envelope", check_envelope), ("thin+gaps", check_thin_and_gaps),
+          ("overhang", check_overhang), ("rays", check_rays), ("relief", check_relief)]
 
-    m, e = rep["mesh"], rep["envelope"]
-    lines = [f"print_check {os.path.basename(a.stl)} ({process})",
-             f"  mesh      {'PASS' if m['pass'] else 'FAIL'}  shells {m['shells']}, non-manifold {m['non_manifold_edges']}, "
-             f"self-int {m['self_intersections']}, volume {m['volume_mm3']} mm3, {m['triangles']} tris",
-             f"  envelope  {'PASS' if e['pass'] else 'FAIL'}  {e['dims'][0]} x {e['dims'][1]} x {e['dims'][2]} mm",
-             f"  thin      {'PASS' if rep['thin']['pass'] else 'FAIL'}  {rep['thin']['regions_below_min_wall']} regions < "
-             f"{limits['min_wall_mm']} mm, {rep['thin']['regions_below_min_feature_unaccepted']} unaccepted < {limits['min_feature_mm']} mm",
-             f"  gaps      WARN x{len(rep['gaps']['warns'])}" if rep['gaps']['warns'] else "  gaps      PASS",
-             f"  overhang  {'PASS' if rep['overhang']['pass'] else 'FAIL'}  {rep['overhang']['unsupported_mm2']} mm2"
-             + ("" if rep['overhang']['gate'] else " (reported only for resin)"),
-             f"  rays      {'PASS' if rep['rays']['pass'] else 'FAIL'}  positive controls passing: "
-             f"{rep['rays'].get('positive_controls_passing', 0)}",
-             f"  relief    {'PASS' if rep['relief']['pass'] else 'FAIL'}  "
-             + ", ".join(f"{c['name']}: {c['median_relief_mm']} mm" for c in rep['relief'].get('checks', []))]
-    if "glb" in rep:
-        lines.append(f"  glb       {'PASS' if rep['glb']['pass'] else 'FAIL'}  {rep['glb']['dims_m']} m")
-    lines += [f"  FAIL {x}" for x in fails] + [f"  warn {x}" for x in warns]
-    lines.append("RESULT: " + ("PASS" if not fails else f"FAIL ({len(fails)})"))
-    print("\n".join(lines))
-    if a.out:
-        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-        json.dump(rep, open(a.out, "w"), indent=1)
+
+def finish(rep, fails, warns, out_path):
+    rep["summary"] = {"pass": not fails, "fails": fails, "warns": warns}
+    if out_path:
+        os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+        with open(out_path, "w") as f:
+            json.dump(rep, f, indent=1)
     print("PRINT_CHECK_JSON " + json.dumps(rep["summary"]))
     sys.stdout.flush()
     sys.exit(0 if not fails else 1)
+
+
+def main():
+    a = parse_args()
+    raw = {}
+    if a.spec:
+        with open(a.spec) as f:
+            raw = json.load(f)
+    if a.process:
+        raw["process"] = a.process
+    spec, limits, errors, warns = specmod.validate(raw)
+    rep = {"file": os.path.abspath(a.stl), "process": spec.get("process"), "limits": limits}
+    if errors:
+        print(f"print_check {os.path.basename(a.stl)}: the spec has {len(errors)} problem(s); nothing was checked")
+        for e in errors:
+            print("  FAIL " + e)
+        print(f"RESULT: FAIL ({len(errors)})")
+        finish(rep, errors, warns, a.out)
+    bm = load_mesh(a.stl)
+    if len(bm.faces) == 0:
+        print(f"print_check {os.path.basename(a.stl)}: FAIL, the STL has no triangles")
+        finish(rep, ["[mesh] the STL has no triangles"], warns, a.out)
+    xs, ys, zs = [v.co.x for v in bm.verts], [v.co.y for v in bm.verts], [v.co.z for v in bm.verts]
+    ctx = {"bm": bm, "bvh": BVHTree.FromBMesh(bm), "spec": spec, "limits": limits,
+           "vert_sets": [set(v.index for v in f.verts) for f in bm.faces],
+           "bbox": ([min(xs), min(ys), min(zs)], [max(xs), max(ys), max(zs)])}
+    for key, fn in CHECKS:
+        res = fn(ctx)
+        if key == "thin+gaps":
+            rep["thin"], rep["gaps"] = res
+        else:
+            rep[key] = res
+    bm.free()
+    if a.glb and os.path.exists(a.glb):
+        rep["glb"] = check_glb(a.glb, rep["envelope"]["dims"])
+    fails = []
+    for key in ("mesh", "envelope", "thin", "gaps", "overhang", "rays", "relief", "glb"):
+        if key in rep:
+            fails += [f"[{key}] {m}" for m in rep[key].get("fails", [])]
+            warns += [f"[{key}] {m}" for m in rep[key].get("warns", [])]
+
+    m, e, t, g, o = rep["mesh"], rep["envelope"], rep["thin"], rep["gaps"], rep["overhang"]
+    ok = lambda x: "PASS" if x["pass"] else "FAIL"  # noqa: E731
+    lines = [f"print_check {os.path.basename(a.stl)} ({spec['process']})",
+             f"  mesh      {ok(m)}  shells {m['shells']}, non-manifold {m['non_manifold_edges']}, flipped "
+             f"{m['inconsistent_winding_edges']}, self-int {m['self_intersections']}, volume {m['volume_mm3']} mm3, "
+             f"{m['triangles']} tris",
+             f"  envelope  {ok(e)}  {e['dims'][0]} x {e['dims'][1]} x {e['dims'][2]} mm",
+             f"  thin      {ok(t)}  {t['too_thin']} too thin, {t['tips']} sharp tips, {t['fragile']} fragile "
+             f"(< {limits['min_wall_mm']} mm), {t['accepted_tris']} accepted tris",
+             f"  gaps      {ok(g)}  {g['regions']} narrower than {limits['min_gap_mm']} mm, {g['crevices']} "
+             f"hairline corners, {g['accepted_tris']} accepted tris",
+             f"  overhang  {ok(o)}  {o['unsupported_mm2']} mm2" + ("" if o["gate"] else " (reported only)"),
+             f"  rays      {ok(rep['rays'])}  positive controls passing: {rep['rays'].get('positive_controls_passing', 0)}",
+             f"  relief    {ok(rep['relief'])}  "
+             + ", ".join(f"{c['name']}: {c['median_relief_mm'] if c['median_relief_mm'] is not None else '-'} mm"
+                         for c in rep["relief"].get("checks", []))]
+    if "glb" in rep:
+        lines.append(f"  glb       {ok(rep['glb'])}  {rep['glb']['dims_m']} m")
+    lines += [f"  FAIL {x}" for x in fails] + [f"  warn {x}" for x in warns]
+    lines.append("RESULT: " + ("PASS" if not fails else f"FAIL ({len(fails)})"))
+    print("\n".join(lines))
+    finish(rep, fails, warns, a.out)
 
 
 main()

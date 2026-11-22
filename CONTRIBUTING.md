@@ -12,7 +12,7 @@ python3 -m unittest discover -s tests -v
 python3 scripts/kit.py selftest
 ```
 
-The unit tests need only Pillow and numpy. `selftest` needs Blender; run it before opening any PR that touches `print_check.py`, `views.py`, `partlib.py` or `selftest_part.py`.
+The unit tests need only Pillow and numpy (they cover `spec.py`, so a new `checks.json` rule gets a unit test). `selftest` needs Blender; run it before opening any PR that touches `print_check.py`, `views.py`, `partlib.py`, `spec.py` or `selftest_part.py`.
 
 ## Ways to contribute
 
@@ -22,7 +22,9 @@ The unit tests need only Pillow and numpy. `selftest` needs Blender; run it befo
 
 **Add a question to the interview.** `references/intake-interview.md` and `templates/CLARITY.md` grow from real misses. Say in the PR which project the question would have saved, and what it would have caught.
 
-**Add a check.** New check types in `print_check.py` need a case in `selftest_part.py` that the check must pass and one it must fail. A check without a negative control isn't proven to catch anything.
+**Add a check.** A new check type is a function added to `CHECKS` in `print_check.py`, its keys validated in `spec.py` and documented in `references/checks-reference.md`, and a pair of cases in `kit.py`'s `SELFTEST_CASES`: one it must pass and one it must fail. A check without a negative control isn't proven to catch anything.
+
+**Add a printer process.** Add it to `scripts/presets.json` with every key, and mirror it in `references/print-limits.md` (a unit test compares the two).
 
 **Share a worked example.** A short `references/worked-example-<part>.md` with what went wrong and what the checks caught is one of the most useful contributions there is. Leave out anything you wouldn't want public, including trademarked marks on the part.
 
