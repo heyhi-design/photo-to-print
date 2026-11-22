@@ -2,6 +2,11 @@
 
 All notable changes to this project are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-11-22
+
+### Added
+- `requirements.txt` (Pillow, numpy) and `requirements-dev.txt` (pytest), so one command installs what the kit needs and test runners can find the suite. CI and the contributing guide use them.
+
 ## [0.1.1] - 2026-11-22
 
 An adversarial review (code, docs and a fresh-install reuse test) found day-0 bugs. All fixed.

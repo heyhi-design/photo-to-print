@@ -1,6 +1,6 @@
 """Tests for the parts of the kit that don't need Blender.
 
-    python3 -m unittest discover -s tests -v
+    python3 -m pytest tests/ -v        (or: python3 -m unittest discover -s tests -v)
 
 The Blender-side checks are proven by `python3 scripts/kit.py selftest`, which
 builds a good part and a defective one and confirms the checks tell them apart.

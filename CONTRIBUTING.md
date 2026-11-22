@@ -7,8 +7,8 @@ Thanks for considering a contribution. Issues and pull requests are both welcome
 ```
 git clone https://github.com/heyhi-design/photo-to-print.git
 cd photo-to-print
-python3 -m pip install --user pillow numpy
-python3 -m unittest discover -s tests -v
+python3 -m pip install --user -r requirements.txt -r requirements-dev.txt
+python3 -m pytest tests/ -v
 python3 scripts/kit.py selftest
 ```
 
@@ -30,7 +30,7 @@ The unit tests need only Pillow and numpy (they cover `spec.py`, so a new `check
 
 ## Pull request expectations
 
-- `python3 -m unittest discover -s tests -v` passes
+- `python3 -m pytest tests/ -v` passes
 - `python3 scripts/kit.py selftest` passes if you touched a Blender-side script
 - Commits are signed off (see DCO, below)
 - The PR description says what changed and why

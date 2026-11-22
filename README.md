@@ -28,7 +28,7 @@ Replayed through this kit, the same three defects fail seven checks before anyon
 ## What you need
 
 - [Blender](https://www.blender.org/download/) (free). Tested with Blender 5.2.1 on macOS. Blender 4.5 or newer is recommended: the faster MANIFOLD boolean solver arrived in 4.5, and on older versions the kit falls back to the EXACT solver. `kit.py doctor` tells you which you have.
-- Python 3.9 or newer with Pillow and numpy: `python3 -m pip install --user pillow numpy`. Optional: `pillow-heif`, to read iPhone HEIC photos directly.
+- Python 3.9 or newer with Pillow and numpy: `python3 -m pip install --user -r requirements.txt` from the skill folder. Optional: `pillow-heif`, to read iPhone HEIC photos directly.
 - Claude Code, or another agent that can read a `SKILL.md` and run shell commands.
 - A ruler or calipers, and a phone camera. A caliper reading of the part's length, width, and height is the single most useful input; photos alone get you to about ±1 mm.
 
