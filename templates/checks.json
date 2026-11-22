@@ -1,0 +1,22 @@
+{
+ "_help": "What 'right' means for this part, as tests. Write it from CLARITY.md BEFORE modelling: every D answer becomes a ray or sweep, every E polarity answer becomes a relief check, C becomes the envelope. Coordinates in mm, part frame: X length, Y width, Z height, Z=0 on the build-plate face. Delete the _example entries once real ones exist.",
+ "part": {"name": "{{PART}}", "version": "v1", "stl": "exports/{name}_{version}.stl"},
+ "process": "{{PROCESS}}",
+ "limits": {},
+ "envelope": {"dims_mm": [null, null, null], "tol_mm": 0.3},
+ "rays": [
+  {"name": "_example positive control: hits a known surface", "origin": [0, 0, 50], "dir": [0, 0, -1], "expect": "hit", "positive_control": true, "why": "proves the rays reach the part; put it where no defect could hide"},
+  {"name": "_example opening goes all the way through", "origin": [0, 0, 50], "dir": [0, 0, -1], "expect": "clear", "why": "CLARITY D3"}
+ ],
+ "sweeps": [
+  {"name": "_example mating part's path is clear", "from": [-5, 0, -20], "to": [5, 0, -20], "step": 0.1, "dir": [0, 0, 1], "allow_hits_in": [], "why": "CLARITY D1/D2: cast from the side it enters"}
+ ],
+ "relief": [
+  {"name": "_example lettering is cut in", "axis": "y", "viewer": "-", "region": {"x": [-3, 3], "z": [1, 3]}, "surface": -5.0, "expect": "recessed", "depth_mm": 0.2, "why": "CLARITY E3"}
+ ],
+ "accepted_thin": [],
+ "accepted_gaps": [],
+ "view_ppmm": 24,
+ "views": [],
+ "sheet": []
+}

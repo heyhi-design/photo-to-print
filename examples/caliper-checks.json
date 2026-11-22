@@ -1,0 +1,377 @@
+{
+ "_help": "The real checks.json from the brake caliper (v1.1, approved). Every test traces to an answer the owner gave. Paths are relative to that project folder.",
+ "part": {
+  "name": "caliper",
+  "version": "v1_1",
+  "stl": "exports/{name}_{version}.stl"
+ },
+ "process": "resin",
+ "envelope": {
+  "dims_mm": [
+   20.5,
+   12.8,
+   6.1
+  ],
+  "min_mm": [
+   -10.25,
+   -6.55,
+   0.0
+  ],
+  "max_mm": [
+   10.25,
+   6.25,
+   6.1
+  ],
+  "tol_mm": 0.05
+ },
+ "rays": [
+  {
+   "name": "pad pin from above",
+   "origin": [
+    0,
+    0,
+    30
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "hit",
+   "hit_at": {
+    "z": 5.6
+   },
+   "tol": 0.05,
+   "positive_control": true,
+   "why": "known surface: proves the rays reach the part"
+  },
+  {
+   "name": "body at a boss",
+   "origin": [
+    3.1,
+    4.0,
+    30
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "hit",
+   "hit_at": {
+    "z": 6.1
+   },
+   "tol": 0.05,
+   "positive_control": true
+  },
+  {
+   "name": "slot open at +X",
+   "origin": [
+    3.1,
+    0,
+    30
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "clear",
+   "why": "ledger: disc slot open top to bottom"
+  },
+  {
+   "name": "slot open at -X",
+   "origin": [
+    -3.1,
+    0,
+    30
+   ],
+   "dir": [
+    0,
+    0,
+    -1
+   ],
+   "expect": "clear"
+  },
+  {
+   "name": "slot out the ends z0.3",
+   "origin": [
+    -15,
+    0,
+    0.3
+   ],
+   "dir": [
+    1,
+    0,
+    0
+   ],
+   "expect": "clear",
+   "why": "ledger: disc slides through both ends"
+  },
+  {
+   "name": "slot out the ends z0.6",
+   "origin": [
+    -15,
+    0,
+    0.6
+   ],
+   "dir": [
+    1,
+    0,
+    0
+   ],
+   "expect": "clear"
+  },
+  {
+   "name": "slot out the ends z0.9",
+   "origin": [
+    -15,
+    0,
+    0.9
+   ],
+   "dir": [
+    1,
+    0,
+    0
+   ],
+   "expect": "clear"
+  },
+  {
+   "name": "Face C above the arch is recessed",
+   "origin": [
+    4.0,
+    -20,
+    5.2
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "expect": "hit",
+   "hit_at": {
+    "y": -5.55
+   },
+   "tol": 0.02,
+   "why": "ledger: band above the curve is sunk 0.2"
+  },
+  {
+   "name": "Face C below the arch is the main face",
+   "origin": [
+    4.0,
+    -20,
+    3.5
+   ],
+   "dir": [
+    0,
+    1,
+    0
+   ],
+   "expect": "hit",
+   "hit_at": {
+    "y": -5.75
+   },
+   "tol": 0.02,
+   "positive_control": true
+  }
+ ],
+ "sweeps": [
+  {
+   "name": "disc enters from Face B across the block",
+   "from": [
+    -6.49,
+    0,
+    -20
+   ],
+   "to": [
+    6.49,
+    0,
+    -20
+   ],
+   "step": 0.1,
+   "dir": [
+    0,
+    0,
+    1
+   ],
+   "why": "ledger: nothing may cross the slot",
+   "allow_hits_in": [
+    {
+     "min": [
+      -0.41,
+      -0.5,
+      4.79
+     ],
+     "max": [
+      0.41,
+      0.5,
+      5.21
+     ],
+     "why": "pad pin underside"
+    }
+   ]
+  }
+ ],
+ "relief": [
+  {
+   "name": "wordmark is cut in",
+   "axis": "y",
+   "viewer": "-",
+   "region": {
+    "x": [
+     -3.8,
+     3.8
+    ],
+    "z": [
+     1.8,
+     3.2
+    ]
+   },
+   "surface": -5.75,
+   "expect": "recessed",
+   "depth_mm": 0.2,
+   "why": "ledger: letters cut into the face"
+  },
+  {
+   "name": "band above the arch is sunk",
+   "axis": "y",
+   "viewer": "-",
+   "region": {
+    "x": [
+     2.0,
+     5.0
+    ],
+    "z": [
+     5.0,
+     5.5
+    ]
+   },
+   "surface": -5.75,
+   "expect": "recessed",
+   "depth_mm": 0.2,
+   "why": "ledger: the curve is a step down, not a raised line"
+  }
+ ],
+ "accepted_thin": [
+  {
+   "min": [
+    -4.0,
+    -6.0,
+    1.5
+   ],
+   "max": [
+    4.0,
+    -5.3,
+    3.5
+   ],
+   "why": "wordmark island tips soften on resin (accepted, README resin gate)"
+  }
+ ],
+ "view_ppmm": 24,
+ "views": [
+  {
+   "name": "P1_top",
+   "face": "+Z",
+   "right": [
+    0,
+    1,
+    0
+   ],
+   "up": [
+    -1,
+    0,
+    0
+   ],
+   "frame_mm": [
+    20,
+    30
+   ],
+   "center_mm": [
+    0,
+    0,
+    3
+   ],
+   "relief_range_mm": 0.6
+  },
+  {
+   "name": "P4_bottom",
+   "face": "-Z",
+   "right": [
+    0,
+    -1,
+    0
+   ],
+   "up": [
+    -1,
+    0,
+    0
+   ],
+   "frame_mm": [
+    20,
+    30
+   ],
+   "center_mm": [
+    0,
+    0,
+    3
+   ],
+   "relief_range_mm": 0.6
+  },
+  {
+   "name": "P2_faceC",
+   "face": "-Y",
+   "right": [
+    0,
+    0,
+    -1
+   ],
+   "up": [
+    1,
+    0,
+    0
+   ],
+   "frame_mm": [
+    14,
+    30
+   ],
+   "center_mm": [
+    0,
+    0,
+    2.9
+   ],
+   "relief_range_mm": 0.4
+  }
+ ],
+ "sheet": [
+  {
+   "view": "P1_top",
+   "photo": "reference/photo-1-face-A-top.jpg",
+   "photo_ppmm": 16.5,
+   "photo_center_px": [
+    711,
+    978
+   ],
+   "label": "Face A (top)"
+  },
+  {
+   "view": "P4_bottom",
+   "photo": "reference/photo-4-face-B-bottom.jpg",
+   "photo_ppmm": 19.15,
+   "photo_center_px": [
+    763,
+    1033
+   ],
+   "label": "Face B (bottom)"
+  },
+  {
+   "view": "P2_faceC",
+   "photo": "reference/photo-2-face-C-logo.jpg",
+   "photo_ppmm": 39.8,
+   "photo_center_px": [
+    449.6,
+    607
+   ],
+   "label": "Face C (logo side)"
+  }
+ ]
+}
